@@ -1,0 +1,68 @@
+// SPDX-License-Identifier: GPL-2.0-only
+
+/dts-v1/;
+
+#include "msm8916-ufi.dtsi"
+
+/ {
+	model = "UFI003S_V01 4G Modem Stick";
+	compatible = "ufi,ufi003s-v01", "qcom,msm8916";
+};
+
+&blsp_i2c1 {
+	status = "okay";
+};
+
+&blsp_i2c2 {
+	status = "okay";
+};
+
+&blsp_i2c3 {
+	status = "okay";
+};
+
+&blsp_i2c4 {
+	status = "okay";
+	clock-frequency = <400000>;
+	ssd1306: oled@3c { // my custom hardware modification
+		compatible = "solomon,ssd1306";
+		reg = <0x3c>;
+		solomon,width = <128>;
+		solomon,height = <64>;
+		solomon,page-offset = <0>;
+		solomon,com-invdir;
+		status = "okay";
+	};
+};
+
+&blsp_i2c5 {
+	status = "okay";
+};
+
+&button_restart {
+	gpios = <&tlmm 37 GPIO_ACTIVE_HIGH>;
+	label = "Enter";
+	//label = "Restart";
+	linux,code = <KEY_ENTER>;
+};
+
+&led_b {
+	gpios = <&tlmm 20 GPIO_ACTIVE_HIGH>;
+};
+
+&led_g {
+	gpios = <&tlmm 21 GPIO_ACTIVE_HIGH>;
+};
+
+&led_r {
+	gpios = <&tlmm 22 GPIO_ACTIVE_HIGH>;
+};
+
+&button_default {
+	pins = "gpio37";
+	bias-pull-down;
+};
+
+&gpio_leds_default {
+	pins = "gpio20", "gpio21", "gpio22";
+};
