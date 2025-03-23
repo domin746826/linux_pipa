@@ -1131,17 +1131,32 @@ static int aw88261_playback_event(struct snd_soc_dapm_widget *w,
 }
 
 /* Create dynamic widget names based on channel number */
-static const struct snd_soc_dapm_widget aw88261_base_widgets[] = {
-	/* playback */
-	SND_SOC_DAPM_AIF_IN_E("AIF_RX", "Speaker_Playback", 0, 0, 0, 0,
-			      aw88261_playback_event,
-			      SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
-	SND_SOC_DAPM_OUTPUT("DAC Output"),
+// static const struct snd_soc_dapm_widget aw88261_base_widgets[] = {
+// 	/* playback */
+// 	SND_SOC_DAPM_AIF_IN_E("AIF_RX", "Speaker_Playback", 0, 0, 0, 0,
+// 			      aw88261_playback_event,
+// 			      SND_SOC_DAPM_PRE_PMU | SND_SOC_DAPM_POST_PMD),
+// 	SND_SOC_DAPM_OUTPUT("DAC Output"),
 
-	/* capture */
-	SND_SOC_DAPM_AIF_OUT("AIF_TX", "Speaker_Capture", 0, SND_SOC_NOPM, 0,
-			     0),
-	SND_SOC_DAPM_INPUT("ADC Input"),
+// 	/* capture */
+// 	SND_SOC_DAPM_AIF_OUT("AIF_TX", "Speaker_Capture", 0, SND_SOC_NOPM, 0,
+// 			     0),
+// 	SND_SOC_DAPM_INPUT("ADC Input"),
+// };
+
+/* W pliku sound/soc/codecs/aw88261.c */
+static const struct snd_soc_dapm_widget aw88261_dapm_widgets[] = {
+	SND_SOC_DAPM_OUTPUT("AW88261_SPK_LEFT"), // Lewy kanał
+	SND_SOC_DAPM_OUTPUT("AW88261_SPK_RIGHT"), // Prawy kanał
+	SND_SOC_DAPM_OUTPUT("AW88261_SPK_SURROUND_L"),
+	SND_SOC_DAPM_OUTPUT("AW88261_SPK_SURROUND_R"),
+};
+
+static const struct snd_soc_dapm_route aw88261_audio_map[] = {
+	{ "AW88261_SPK_LEFT", NULL, "LINEOUT_L" },
+	{ "AW88261_SPK_RIGHT", NULL, "LINEOUT_R" },
+	{ "AW88261_SPK_SURROUND_L", NULL, "LINEOUT_SL" },
+	{ "AW88261_SPK_SURROUND_R", NULL, "LINEOUT_SR" },
 };
 
 /* New function to create unique widget names for each channel */
@@ -1152,7 +1167,7 @@ static int aw88261_create_unique_widgets(struct aw88261 *aw88261,
 	struct snd_soc_dapm_widget *widgets;
 	char *widget_name;
 	int i, ret;
-	int widget_count = ARRAY_SIZE(aw88261_base_widgets);
+	int widget_count = ARRAY_SIZE(aw88261_dapm_widgets);
 
 	widgets = devm_kcalloc(aw_dev->dev, widget_count,
 			       sizeof(struct snd_soc_dapm_widget), GFP_KERNEL);
@@ -1160,12 +1175,12 @@ static int aw88261_create_unique_widgets(struct aw88261 *aw88261,
 		return -ENOMEM;
 
 	/* Copy the base widgets and modify their names */
-	memcpy(widgets, aw88261_base_widgets,
+	memcpy(widgets, aw88261_dapm_widgets,
 	       sizeof(struct snd_soc_dapm_widget) * widget_count);
 
 	for (i = 0; i < widget_count; i++) {
 		widget_name = devm_kasprintf(aw_dev->dev, GFP_KERNEL, "%s_CH%d",
-					     aw88261_base_widgets[i].name,
+					     aw88261_dapm_widgets[i].name,
 					     aw_dev->channel);
 		if (!widget_name)
 			return -ENOMEM;

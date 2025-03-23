@@ -10,6 +10,7 @@
 #include <linux/soundwire/sdw.h>
 #include <sound/jack.h>
 #include <linux/input-event-codes.h>
+#include <sound/soc-dpcm.h>
 #include "qdsp6/q6afe.h"
 #include "common.h"
 #include "sdw.h"
@@ -36,91 +37,10 @@ static int sm8250_snd_init(struct snd_soc_pcm_runtime *rtd)
 	return qcom_snd_wcd_jack_setup(rtd, &data->jack, &data->jack_setup);
 }
 
-static int sm8250_tdm_snd_hw_params(struct snd_pcm_substream *substream,
-				    struct snd_pcm_hw_params *params)
-{
-	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
-	struct snd_soc_dai *cpu_dai = snd_soc_rtd_to_cpu(rtd, 0);
-	struct snd_soc_card *card = rtd->card;
-	int ret = 0;
-	int channels, slots, slot_width;
-	bool is_aw88261 = false;
-	struct snd_soc_dai *codec_dai;
-	int j;
-
-	/* Check if we're dealing with an AW88261 codec */
-	for_each_rtd_codec_dais(rtd, j, codec_dai) {
-		if (strstr(codec_dai->component->name, "aw88261") != NULL) {
-			is_aw88261 = true;
-			break;
-		}
-	}
-
-	channels = params_channels(params);
-
-	/* Configure TDM with more slots for quad-speaker setup */
-	if (is_aw88261) {
-		slots = 8; /* 8 slots for quad-speaker setup */
-		slot_width = 32;
-	} else {
-		slots = 8;
-		slot_width = 32;
-	}
-
-	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
-		/* Special case for AW88261 (Xiaomi Pad 6) */
-		if (is_aw88261 && cpu_dai->id == TERTIARY_TDM_RX_0) {
-			dev_info(
-				card->dev,
-				"Applying AW88261 specific TDM settings (quad-speaker setup)\n");
-
-			/* AW88261 quad-speaker needs all 4 slots active */
-			ret = snd_soc_dai_set_tdm_slot(cpu_dai, 0, 0x0F, slots,
-						       slot_width);
-		} else {
-			ret = snd_soc_dai_set_tdm_slot(cpu_dai, 0, 0x03, slots,
-						       slot_width);
-		}
-
-		if (ret < 0) {
-			dev_err(rtd->dev,
-				"%s: failed to set tdm slot, err:%d\n",
-				__func__, ret);
-			goto end;
-		}
-
-		ret = snd_soc_dai_set_channel_map(cpu_dai, 0, NULL, channels,
-						  tdm_slot_offset);
-		if (ret < 0) {
-			dev_err(rtd->dev,
-				"%s: failed to set channel map, err:%d\n",
-				__func__, ret);
-			goto end;
-		}
-	} else {
-		ret = snd_soc_dai_set_tdm_slot(cpu_dai, 0xf, 0, slots,
-					       slot_width);
-		if (ret < 0) {
-			dev_err(rtd->dev,
-				"%s: failed to set tdm slot, err:%d\n",
-				__func__, ret);
-			goto end;
-		}
-
-		ret = snd_soc_dai_set_channel_map(cpu_dai, channels,
-						  tdm_slot_offset, 0, NULL);
-		if (ret < 0) {
-			dev_err(rtd->dev,
-				"%s: failed to set channel map, err:%d\n",
-				__func__, ret);
-			goto end;
-		}
-	}
-
-end:
-	return ret;
-}
-
+static const struct snd_kcontrol_new sm8250_mixer_controls[] = {
+	SOC_DAPM_SINGLE("MultiMedia1 TERT_TDM_RX_0", SND_SOC_NOPM, 0, 1, 0),
+	/* Add more controls for additional routing paths if needed */
+};
 static int sm8250_be_hw_params_fixup(struct snd_soc_pcm_runtime *rtd,
 				     struct snd_pcm_hw_params *params)
 {
@@ -152,6 +72,18 @@ static int sm8250_snd_startup(struct snd_pcm_substream *substream)
 			break;
 		}
 	}
+
+	ret = snd_soc_dai_set_fmt(cpu_dai, fmt);
+	if (ret < 0) {
+		dev_err(rtd->dev, "Failed to set CPU DAI format: %d\n", ret);
+		return ret;
+	}
+
+	dev_info(
+		rtd->card->dev,
+		"TDM startup successful for AW88261 quad-speaker setup: fmt=0x%x, codec_fmt=0x%x\n",
+		fmt, codec_dai_fmt);
+	// break;
 
 	switch (cpu_dai->id) {
 	case PRIMARY_MI2S_RX:
@@ -267,6 +199,116 @@ static void sm2450_snd_shutdown(struct snd_pcm_substream *substream)
 	sdw_release_stream(sruntime);
 }
 
+static void sm8250_dump_graph(struct snd_soc_card *card)
+{
+	struct snd_soc_pcm_runtime *rtd;
+	struct snd_soc_dai *cpu_dai;
+	struct snd_soc_dai *codec_dai;
+	int i, j;
+
+	dev_info(card->dev, "Dumping sound card graph\n");
+
+	for_each_card_rtds(card, rtd) {
+		dev_info(card->dev, "PCM runtime %d: %s\n", i,
+			 rtd->dai_link->name);
+
+		for_each_rtd_cpu_dais(rtd, j, cpu_dai) {
+			dev_info(card->dev, "  CPU DAI %d: %s\n", j,
+				 cpu_dai->component->name);
+		}
+
+		for_each_rtd_codec_dais(rtd, j, codec_dai) {
+			dev_info(card->dev, "  Codec DAI %d: %s\n", j,
+				 codec_dai->component->name);
+		}
+	}
+}
+
+static int sm8250_tdm_snd_hw_params(struct snd_pcm_substream *substream,
+				    struct snd_pcm_hw_params *params)
+{
+	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
+	struct snd_soc_dai *cpu_dai = snd_soc_rtd_to_cpu(rtd, 0);
+	struct snd_soc_card *card = rtd->card;
+	int ret = 0;
+	int channels, slots, slot_width;
+	bool is_aw88261 = false;
+	struct snd_soc_dai *codec_dai;
+	int j;
+
+	/* Check if we're dealing with an AW88261 codec */
+	for_each_rtd_codec_dais(rtd, j, codec_dai) {
+		if (strstr(codec_dai->component->name, "aw88261") != NULL) {
+			is_aw88261 = true;
+			break;
+		}
+	}
+
+	channels = params_channels(params);
+
+	/* Configure TDM with more slots for quad-speaker setup */
+	if (is_aw88261) {
+		slots = 8; /* 8 slots for quad-speaker setup */
+		slot_width = 32;
+	} else {
+		slots = 8;
+		slot_width = 32;
+	}
+
+	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
+		/* Special case for AW88261 (Xiaomi Pad 6) */
+		if (is_aw88261 && cpu_dai->id == TERTIARY_TDM_RX_0) {
+			dev_info(
+				card->dev,
+				"Applying AW88261 specific TDM settings (quad-speaker setup)\n");
+
+			/* AW88261 quad-speaker needs all 4 slots active */
+			ret = snd_soc_dai_set_tdm_slot(cpu_dai, 0, 0x0F, slots,
+						       slot_width);
+		} else {
+			ret = snd_soc_dai_set_tdm_slot(cpu_dai, 0, 0x03, slots,
+						       slot_width);
+		}
+
+		if (ret < 0) {
+			dev_err(rtd->dev,
+				"%s: failed to set tdm slot, err:%d\n",
+				__func__, ret);
+			goto end;
+		}
+
+		ret = snd_soc_dai_set_channel_map(cpu_dai, 0, NULL, channels,
+						  tdm_slot_offset);
+		if (ret < 0) {
+			dev_err(rtd->dev,
+				"%s: failed to set channel map, err:%d\n",
+				__func__, ret);
+			goto end;
+		}
+	} else {
+		ret = snd_soc_dai_set_tdm_slot(cpu_dai, 0xf, 0, slots,
+					       slot_width);
+		if (ret < 0) {
+			dev_err(rtd->dev,
+				"%s: failed to set tdm slot, err:%d\n",
+				__func__, ret);
+			goto end;
+		}
+
+		ret = snd_soc_dai_set_channel_map(cpu_dai, channels,
+						  tdm_slot_offset, 0, NULL);
+		if (ret < 0) {
+			dev_err(rtd->dev,
+				"%s: failed to set channel map, err:%d\n",
+				__func__, ret);
+			goto end;
+		}
+	}
+
+end:
+	return ret;
+}
+
 static int sm8250_snd_hw_params(struct snd_pcm_substream *substream,
 				struct snd_pcm_hw_params *params)
 {
@@ -327,6 +369,25 @@ static void sm8250_add_be_ops(struct snd_soc_card *card)
 	}
 }
 
+static int sm8250_init_audio_routing(struct snd_soc_card *card)
+{
+	struct snd_soc_dapm_context *dapm = &card->dapm;
+
+	static const struct snd_soc_dapm_route routes[] = {
+		// Frontend -> Backend
+		{ "MultiMedia1 Playback", NULL, "MM1_Playback" },
+		{ "TERT_TDM_RX_0", NULL, "MultiMedia1 Playback" },
+
+		// TDM -> Wzmacniacze
+		{ "AW88261_SPK_LEFT", NULL, "TERT_TDM_RX_0" },
+		{ "AW88261_SPK_RIGHT", NULL, "TERT_TDM_RX_0" },
+		{ "AW88261_SPK_SURROUND_L", NULL, "TERT_TDM_RX_0" },
+		{ "AW88261_SPK_SURROUND_R", NULL, "TERT_TDM_RX_0" },
+	};
+
+	return snd_soc_dapm_add_routes(dapm, routes, ARRAY_SIZE(routes));
+}
+
 static int sm8250_platform_probe(struct platform_device *pdev)
 {
 	struct snd_soc_card *card;
@@ -334,7 +395,7 @@ static int sm8250_platform_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	int ret;
 
-	printk(KERN_INFO "snd8250_platform_probe test2xd\n");
+	printk(KERN_INFO "snd8250_platform_probe test2xdxd\n");
 
 	card = devm_kzalloc(dev, sizeof(*card), GFP_KERNEL);
 	if (!card)
@@ -354,8 +415,24 @@ static int sm8250_platform_probe(struct platform_device *pdev)
 		return ret;
 
 	card->driver_name = DRIVER_NAME;
+	card->controls = sm8250_mixer_controls;
+	card->num_controls = ARRAY_SIZE(sm8250_mixer_controls);
 	sm8250_add_be_ops(card);
-	return devm_snd_soc_register_card(dev, card);
+	printk(KERN_INFO "snd8250_platform_probe card registering...\n");
+
+	ret = devm_snd_soc_register_card(dev, card);
+	if (ret)
+		return ret;
+	printk(KERN_INFO "snd8250_platform_probe card registered\n");
+	/* Add audio routing after card registration */
+	printk(KERN_INFO "snd8250_platform_probe card routing...\n");
+
+	ret = sm8250_init_audio_routing(card);
+	if (ret)
+		dev_warn(dev, "Failed to set up audio routing: %d\n", ret);
+	printk(KERN_INFO "snd8250_platform_probe card registered %d\n", ret);
+
+	return 0;
 }
 
 static const struct of_device_id snd_sm8250_dt_match[] = {
